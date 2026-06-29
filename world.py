@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Fetch World daily metrics (volume, traders, trades, oracle cost)
-from three single-row Dune queries and post a compact report to Slack.
+Fetch World daily metrics (volume, traders, trades, oracle cost, fee streams)
+from Dune queries and post a compact report to Slack.
 """
 
 import os
@@ -18,6 +18,7 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_JANUS")
 TRADES_VOL_QUERY_ID = 7838619   # trades_* , volume_*
 TRADERS_QUERY_ID    = 7838557   # active_* , new_signers_*
 ORACLE_QUERY_ID     = 7838666   # oracle_cost_*
+FEES_QUERY_ID       = 7842592   # one row per stream: dflow / phantom / janus_protocol
 
 if not DUNE_API_KEY:
     raise SystemExit("DUNE_API_KEY_FRONTEND is not set — add it as a repo secret.")
@@ -27,6 +28,12 @@ if not SLACK_WEBHOOK_URL:
 
 def fetch_dune_row(query_id):
     """Fetch a single-row Dune result; return {} if empty."""
+    rows = fetch_dune_rows(query_id)
+    return rows[0] if rows else {}
+
+
+def fetch_dune_rows(query_id):
+    """Fetch all rows of a Dune result; return [] if empty."""
     print(f"Fetching Dune query {query_id}...")
     dune = DuneClient(DUNE_API_KEY)
     try:
@@ -38,7 +45,12 @@ def fetch_dune_row(query_id):
 
     rows = query_result.result.rows
     print(f"Fetched {len(rows)} rows")
-    return rows[0] if rows else {}
+    return rows
+
+
+def index_by_stream(rows):
+    """Map a multi-row fee result to {stream_name: row}."""
+    return {r.get("stream"): r for r in rows}
 
 
 def format_volume(value):
@@ -83,7 +95,7 @@ def format_change(pct):
 
 
 # monospace column widths
-LBL, COL1, COL2 = 12, 11, 12
+LBL, COL1, COL2 = 14, 11, 12
 
 
 def data_row(label, val_y, val_d, change):
@@ -91,7 +103,7 @@ def data_row(label, val_y, val_d, change):
     return f"`{cell}`" + format_change(change)
 
 
-def build_blocks(tv, tr, orc):
+def build_blocks(tv, tr, orc, dflow, phantom, janus):
     today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
     y_str = yesterday.strftime("%b %d")
@@ -134,6 +146,24 @@ def build_blocks(tv, tr, orc):
             format_sol(orc.get("oracle_cost_day_before")),
             orc.get("oracle_cost_pct_change"),
         ),
+        data_row(
+            "DFlow Fees",
+            format_volume(dflow.get("fees_yesterday")),
+            format_volume(dflow.get("fees_day_before")),
+            dflow.get("fees_pct_change"),
+        ),
+        data_row(
+            "Phantom Fees",
+            format_volume(phantom.get("fees_yesterday")),
+            format_volume(phantom.get("fees_day_before")),
+            phantom.get("fees_pct_change"),
+        ),
+        data_row(
+            "JanusFi P Fees",
+            format_volume(janus.get("fees_yesterday")),
+            format_volume(janus.get("fees_day_before")),
+            janus.get("fees_pct_change"),
+        ),
     ]
     table = "\n".join(rows)
 
@@ -155,8 +185,8 @@ def build_blocks(tv, tr, orc):
     ]
 
 
-def send_to_slack(tv, tr, orc):
-    blocks = build_blocks(tv, tr, orc)
+def send_to_slack(tv, tr, orc, dflow, phantom, janus):
+    blocks = build_blocks(tv, tr, orc, dflow, phantom, janus)
     payload = {"text": "World Daily Metrics", "blocks": blocks}
     response = requests.post(SLACK_WEBHOOK_URL, json=payload)
     if response.status_code == 200:
@@ -173,7 +203,12 @@ def main():
     tr = fetch_dune_row(TRADERS_QUERY_ID)
     orc = fetch_dune_row(ORACLE_QUERY_ID)
 
-    if not (tv or tr or orc):
+    fee = index_by_stream(fetch_dune_rows(FEES_QUERY_ID))
+    dflow = fee.get("dflow", {})
+    phantom = fee.get("phantom", {})
+    janus = fee.get("janus_protocol", {})
+
+    if not (tv or tr or orc or dflow or phantom or janus):
         print("No data fetched from Dune. Exiting.")
         return
 
@@ -182,8 +217,11 @@ def main():
     print("New traders:", format_num(tr.get("new_signers_yesterday")), "vs", format_num(tr.get("new_signers_day_before")))
     print("Trades:", format_num(tv.get("trades_yesterday")), "vs", format_num(tv.get("trades_day_before")))
     print("Oracle:", format_sol(orc.get("oracle_cost_yesterday")), "vs", format_sol(orc.get("oracle_cost_day_before")))
+    print("DFlow:", format_volume(dflow.get("fees_yesterday")), "vs", format_volume(dflow.get("fees_day_before")))
+    print("Phantom:", format_volume(phantom.get("fees_yesterday")), "vs", format_volume(phantom.get("fees_day_before")))
+    print("JanusFi:", format_volume(janus.get("fees_yesterday")), "vs", format_volume(janus.get("fees_day_before")))
 
-    send_to_slack(tv, tr, orc)
+    send_to_slack(tv, tr, orc, dflow, phantom, janus)
     print("\nJob completed!")
 
 
