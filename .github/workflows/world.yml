@@ -2,7 +2,7 @@ name: World Daily Report
 on:
   schedule:
     # Run at 12:00 PM UTC daily (noon)
-    - cron: '0 18 * * *'
+    - cron: '0 12 * * *'
   workflow_dispatch:  # Allow manual trigger
 jobs:
   generate-report:
