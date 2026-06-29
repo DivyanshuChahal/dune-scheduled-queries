@@ -73,9 +73,11 @@ def pct_change(new, old):
 
 
 def format_change(pct):
-    """Emoji + signed percent; '' when pct is None (no baseline)."""
-    if pct is None:
+    """Emoji + signed percent; '' when pct is None/empty (no baseline).
+    Coerces to float since Dune returns ROUND() columns as strings."""
+    if pct is None or pct == "":
         return ""
+    pct = float(pct)
     if pct >= 0:
         return f"  📈 `+{abs(pct):.1f}%`"
     return f"  📉 `-{abs(pct):.1f}%`"
