@@ -16,7 +16,7 @@ DUNE_API_KEY = os.getenv("DUNE_API_KEY_FRONTEND")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_JANUS")
 
 TRADES_VOL_QUERY_ID = 7838619   # trades_* , volume_*
-TRADERS_QUERY_ID    = 7838557   # active_* , new_signers_yesterday
+TRADERS_QUERY_ID    = 7838557   # active_* , new_signers_*
 ORACLE_QUERY_ID     = 7838666   # oracle_cost_*
 
 if not DUNE_API_KEY:
@@ -73,14 +73,13 @@ def pct_change(new, old):
 
 
 def format_change(pct):
-    """Emoji + signed percent; '' when pct is None/empty (no baseline).
+    """Signed percent in its own backtick; '' when pct is None/empty (no baseline).
     Coerces to float since Dune returns ROUND() columns as strings."""
     if pct is None or pct == "":
         return ""
     pct = float(pct)
-    if pct >= 0:
-        return f"  📈 `+{abs(pct):.1f}%`"
-    return f"  📉 `-{abs(pct):.1f}%`"
+    sign = "+" if pct >= 0 else "-"
+    return f"   `{sign}{abs(pct):.1f}%`"
 
 
 # monospace column widths
@@ -117,8 +116,12 @@ def build_blocks(tv, tr, orc):
             format_num(tr.get("active_day_before")),
             pct_change(tr.get("active_yesterday"), tr.get("active_day_before")),
         ),
-        # new traders has no prior-day baseline -> dash, no change arrow
-        f"`{'New traders':<{LBL}}{format_num(tr.get('new_signers_yesterday')):>{COL1}}{'—':>{COL2}}`",
+        data_row(
+            "New traders",
+            format_num(tr.get("new_signers_yesterday")),
+            format_num(tr.get("new_signers_day_before")),
+            pct_change(tr.get("new_signers_yesterday"), tr.get("new_signers_day_before")),
+        ),
         data_row(
             "Trades",
             format_num(tv.get("trades_yesterday")),
@@ -176,7 +179,7 @@ def main():
 
     print("\nVolume:", format_volume(tv.get("volume_yesterday")), "vs", format_volume(tv.get("volume_day_before")))
     print("Traders:", format_num(tr.get("active_yesterday")), "vs", format_num(tr.get("active_day_before")))
-    print("New traders:", format_num(tr.get("new_signers_yesterday")))
+    print("New traders:", format_num(tr.get("new_signers_yesterday")), "vs", format_num(tr.get("new_signers_day_before")))
     print("Trades:", format_num(tv.get("trades_yesterday")), "vs", format_num(tv.get("trades_day_before")))
     print("Oracle:", format_sol(orc.get("oracle_cost_yesterday")), "vs", format_sol(orc.get("oracle_cost_day_before")))
 
