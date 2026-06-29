@@ -126,7 +126,7 @@ def build_blocks(tv, tr, orc):
             tv.get("trades_pct_change"),
         ),
         data_row(
-            "Oracle ◎",
+            "Oracle Cost",
             format_sol(orc.get("oracle_cost_yesterday")),
             format_sol(orc.get("oracle_cost_day_before")),
             orc.get("oracle_cost_pct_change"),
