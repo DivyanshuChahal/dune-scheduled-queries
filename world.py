@@ -18,12 +18,12 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_JANUS")
 TRADES_VOL_QUERY_ID = 7838619   # trades_* , volume_*
 TRADERS_QUERY_ID    = 7838557   # active_* , new_signers_*
 ORACLE_QUERY_ID     = 7838666   # oracle_cost_*
-FEES_QUERY_ID       = 7842592   # one row per stream: dflow / phantom / janus_protocol
+FEES_QUERY_ID       = 7842592   # one row per stream: dflow / phantom / janusfi_protocol
 
 if not DUNE_API_KEY:
     raise SystemExit("DUNE_API_KEY_FRONTEND is not set — add it as a repo secret.")
 if not SLACK_WEBHOOK_URL:
-    raise SystemExit("SLACK_WEBHOOK_JANUS is not set — add it as a repo secret.")
+    raise SystemExit("SLACK_WEBHOOK_JANUSFI is not set — add it as a repo secret.")
 
 
 def fetch_dune_row(query_id):
@@ -103,7 +103,7 @@ def data_row(label, val_y, val_d, change):
     return f"`{cell}`" + format_change(change)
 
 
-def build_blocks(tv, tr, orc, dflow, phantom, janus):
+def build_blocks(tv, tr, orc, dflow, phantom, janusfi):
     today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
     y_str = yesterday.strftime("%b %d")
@@ -160,9 +160,9 @@ def build_blocks(tv, tr, orc, dflow, phantom, janus):
         ),
         data_row(
             "JanusFi P Fees",
-            format_volume(janus.get("fees_yesterday")),
-            format_volume(janus.get("fees_day_before")),
-            janus.get("fees_pct_change"),
+            format_volume(janusfi.get("fees_yesterday")),
+            format_volume(janusfi.get("fees_day_before")),
+            janusfi.get("fees_pct_change"),
         ),
     ]
     table = "\n".join(rows)
@@ -185,8 +185,8 @@ def build_blocks(tv, tr, orc, dflow, phantom, janus):
     ]
 
 
-def send_to_slack(tv, tr, orc, dflow, phantom, janus):
-    blocks = build_blocks(tv, tr, orc, dflow, phantom, janus)
+def send_to_slack(tv, tr, orc, dflow, phantom, janusfi):
+    blocks = build_blocks(tv, tr, orc, dflow, phantom, janusfi)
     payload = {"text": "World Daily Metrics", "blocks": blocks}
     response = requests.post(SLACK_WEBHOOK_URL, json=payload)
     if response.status_code == 200:
@@ -206,9 +206,9 @@ def main():
     fee = index_by_stream(fetch_dune_rows(FEES_QUERY_ID))
     dflow = fee.get("dflow", {})
     phantom = fee.get("phantom", {})
-    janus = fee.get("janus_protocol", {})
+    janusfi = fee.get("janusfi_protocol", {})
 
-    if not (tv or tr or orc or dflow or phantom or janus):
+    if not (tv or tr or orc or dflow or phantom or janusfi):
         print("No data fetched from Dune. Exiting.")
         return
 
@@ -219,9 +219,9 @@ def main():
     print("Oracle:", format_sol(orc.get("oracle_cost_yesterday")), "vs", format_sol(orc.get("oracle_cost_day_before")))
     print("DFlow:", format_volume(dflow.get("fees_yesterday")), "vs", format_volume(dflow.get("fees_day_before")))
     print("Phantom:", format_volume(phantom.get("fees_yesterday")), "vs", format_volume(phantom.get("fees_day_before")))
-    print("JanusFi:", format_volume(janus.get("fees_yesterday")), "vs", format_volume(janus.get("fees_day_before")))
+    print("JanusFi:", format_volume(janusfi.get("fees_yesterday")), "vs", format_volume(janusfi.get("fees_day_before")))
 
-    send_to_slack(tv, tr, orc, dflow, phantom, janus)
+    send_to_slack(tv, tr, orc, dflow, phantom, janusfi)
     print("\nJob completed!")
 
 
