@@ -19,6 +19,7 @@ TRADES_VOL_QUERY_ID = 7838619   # trades_* , volume_*
 TRADERS_QUERY_ID    = 7838557   # active_* , new_signers_*
 ORACLE_QUERY_ID     = 7838666   # oracle_cost_*
 FEES_QUERY_ID       = 7842592   # one row per stream: dflow / phantom / janusfi_protocol
+MAX_OI_QUERY_ID     = 7868485   # block_date, peak_total_oi (last 2 days)
 
 if not DUNE_API_KEY:
     raise SystemExit("DUNE_API_KEY_FRONTEND is not set — add it as a repo secret.")
@@ -51,6 +52,15 @@ def fetch_dune_rows(query_id):
 def index_by_stream(rows):
     """Map a multi-row fee result to {stream_name: row}."""
     return {r.get("stream"): r for r in rows}
+
+
+def oi_by_day(rows):
+    """Turn the 2-row [block_date, peak_total_oi] result into
+    {oi_yesterday, oi_day_before}, newest block_date first."""
+    ordered = sorted(rows, key=lambda r: r.get("block_date") or "", reverse=True)
+    y = ordered[0].get("peak_total_oi") if len(ordered) > 0 else 0
+    d = ordered[1].get("peak_total_oi") if len(ordered) > 1 else 0
+    return {"oi_yesterday": y, "oi_day_before": d}
 
 
 def format_volume(value):
@@ -103,7 +113,7 @@ def data_row(label, val_y, val_d, change):
     return f"`{cell}`" + format_change(change)
 
 
-def build_blocks(tv, tr, orc, dflow, phantom, janusfi):
+def build_blocks(tv, tr, orc, dflow, phantom, janusfi, oi):
     today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
     y_str = yesterday.strftime("%b %d")
@@ -121,6 +131,12 @@ def build_blocks(tv, tr, orc, dflow, phantom, janusfi):
             format_volume(tv.get("volume_yesterday")),
             format_volume(tv.get("volume_day_before")),
             tv.get("volume_pct_change"),
+        ),
+        data_row(
+            "Max OI",
+            format_volume(oi.get("oi_yesterday")),
+            format_volume(oi.get("oi_day_before")),
+            pct_change(oi.get("oi_yesterday"), oi.get("oi_day_before")),
         ),
         data_row(
             "Traders",
@@ -185,8 +201,8 @@ def build_blocks(tv, tr, orc, dflow, phantom, janusfi):
     ]
 
 
-def send_to_slack(tv, tr, orc, dflow, phantom, janusfi):
-    blocks = build_blocks(tv, tr, orc, dflow, phantom, janusfi)
+def send_to_slack(tv, tr, orc, dflow, phantom, janusfi, oi):
+    blocks = build_blocks(tv, tr, orc, dflow, phantom, janusfi, oi)
     payload = {"text": "World Daily Metrics", "blocks": blocks}
     response = requests.post(SLACK_WEBHOOK_URL, json=payload)
     if response.status_code == 200:
@@ -202,6 +218,7 @@ def main():
     tv = fetch_dune_row(TRADES_VOL_QUERY_ID)
     tr = fetch_dune_row(TRADERS_QUERY_ID)
     orc = fetch_dune_row(ORACLE_QUERY_ID)
+    oi = oi_by_day(fetch_dune_rows(MAX_OI_QUERY_ID))
 
     fee = index_by_stream(fetch_dune_rows(FEES_QUERY_ID))
     dflow = fee.get("dflow", {})
@@ -213,6 +230,7 @@ def main():
         return
 
     print("\nVolume:", format_volume(tv.get("volume_yesterday")), "vs", format_volume(tv.get("volume_day_before")))
+    print("Max OI:", format_volume(oi.get("oi_yesterday")), "vs", format_volume(oi.get("oi_day_before")))
     print("Traders:", format_num(tr.get("active_yesterday")), "vs", format_num(tr.get("active_day_before")))
     print("New traders:", format_num(tr.get("new_signers_yesterday")), "vs", format_num(tr.get("new_signers_day_before")))
     print("Trades:", format_num(tv.get("trades_yesterday")), "vs", format_num(tv.get("trades_day_before")))
@@ -221,7 +239,7 @@ def main():
     print("Phantom:", format_volume(phantom.get("fees_yesterday")), "vs", format_volume(phantom.get("fees_day_before")))
     print("JanusFi:", format_volume(janusfi.get("fees_yesterday")), "vs", format_volume(janusfi.get("fees_day_before")))
 
-    send_to_slack(tv, tr, orc, dflow, phantom, janusfi)
+    send_to_slack(tv, tr, orc, dflow, phantom, janusfi, oi)
     print("\nJob completed!")
 
 
