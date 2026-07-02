@@ -1,8 +1,11 @@
 name: World Daily Report
 on:
   schedule:
-    # Run at 12:00 PM UTC daily (noon)
-    - cron: '0 12 * * *'
+    # Run at 12:17 UTC daily (kept near noon, but off the top of the hour).
+    # :00 is GitHub's most congested cron slot — scheduled runs get delayed
+    # or dropped there under load. An off-peak, non-multiple-of-5 minute is
+    # far more reliable.
+    - cron: '17 12 * * *'
   workflow_dispatch:  # Allow manual trigger
 jobs:
   generate-report:
