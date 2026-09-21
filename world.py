@@ -16,7 +16,6 @@ DUNE_API_KEY = os.getenv("DUNE_API_KEY_FRONTEND")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_JANUS")
 
 TRADES_VOL_QUERY_ID = 7838619   # trades_* , volume_*
-TRADERS_QUERY_ID    = 7838557   # active_* , new_signers_*
 ORACLE_QUERY_ID     = 7838666   # oracle_cost_*
 FEES_QUERY_ID       = 7842592   # one row per stream: dflow / phantom / janusfi_protocol
 MAX_OI_QUERY_ID     = 7868485   # block_date, peak_total_oi (last 2 days)
@@ -113,7 +112,7 @@ def data_row(label, val_y, val_d, change):
     return f"`{cell}`" + format_change(change)
 
 
-def build_blocks(tv, tr, orc, dflow, phantom, janusfi, oi):
+def build_blocks(tv, orc, dflow, phantom, janusfi, oi):
     today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
     y_str = yesterday.strftime("%b %d")
@@ -137,18 +136,6 @@ def build_blocks(tv, tr, orc, dflow, phantom, janusfi, oi):
             format_volume(oi.get("oi_yesterday")),
             format_volume(oi.get("oi_day_before")),
             pct_change(oi.get("oi_yesterday"), oi.get("oi_day_before")),
-        ),
-        data_row(
-            "Traders",
-            format_num(tr.get("active_yesterday")),
-            format_num(tr.get("active_day_before")),
-            pct_change(tr.get("active_yesterday"), tr.get("active_day_before")),
-        ),
-        data_row(
-            "New traders",
-            format_num(tr.get("new_signers_yesterday")),
-            format_num(tr.get("new_signers_day_before")),
-            pct_change(tr.get("new_signers_yesterday"), tr.get("new_signers_day_before")),
         ),
         data_row(
             "Trades",
@@ -201,8 +188,8 @@ def build_blocks(tv, tr, orc, dflow, phantom, janusfi, oi):
     ]
 
 
-def send_to_slack(tv, tr, orc, dflow, phantom, janusfi, oi):
-    blocks = build_blocks(tv, tr, orc, dflow, phantom, janusfi, oi)
+def send_to_slack(tv, orc, dflow, phantom, janusfi, oi):
+    blocks = build_blocks(tv, orc, dflow, phantom, janusfi, oi)
     payload = {"text": "World Daily Metrics", "blocks": blocks}
     response = requests.post(SLACK_WEBHOOK_URL, json=payload)
     if response.status_code == 200:
@@ -216,7 +203,6 @@ def main():
     print(f"Starting World report at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
     tv = fetch_dune_row(TRADES_VOL_QUERY_ID)
-    tr = fetch_dune_row(TRADERS_QUERY_ID)
     orc = fetch_dune_row(ORACLE_QUERY_ID)
     oi = oi_by_day(fetch_dune_rows(MAX_OI_QUERY_ID))
 
@@ -225,21 +211,19 @@ def main():
     phantom = fee.get("phantom", {})
     janusfi = fee.get("janusfi_protocol", {})
 
-    if not (tv or tr or orc or dflow or phantom or janusfi):
+    if not (tv or orc or dflow or phantom or janusfi):
         print("No data fetched from Dune. Exiting.")
         return
 
     print("\nVolume:", format_volume(tv.get("volume_yesterday")), "vs", format_volume(tv.get("volume_day_before")))
     print("Max OI:", format_volume(oi.get("oi_yesterday")), "vs", format_volume(oi.get("oi_day_before")))
-    print("Traders:", format_num(tr.get("active_yesterday")), "vs", format_num(tr.get("active_day_before")))
-    print("New traders:", format_num(tr.get("new_signers_yesterday")), "vs", format_num(tr.get("new_signers_day_before")))
     print("Trades:", format_num(tv.get("trades_yesterday")), "vs", format_num(tv.get("trades_day_before")))
     print("Oracle:", format_sol(orc.get("oracle_cost_yesterday")), "vs", format_sol(orc.get("oracle_cost_day_before")))
     print("DFlow:", format_volume(dflow.get("fees_yesterday")), "vs", format_volume(dflow.get("fees_day_before")))
     print("Phantom:", format_volume(phantom.get("fees_yesterday")), "vs", format_volume(phantom.get("fees_day_before")))
     print("JanusFi:", format_volume(janusfi.get("fees_yesterday")), "vs", format_volume(janusfi.get("fees_day_before")))
 
-    send_to_slack(tv, tr, orc, dflow, phantom, janusfi, oi)
+    send_to_slack(tv, orc, dflow, phantom, janusfi, oi)
     print("\nJob completed!")
 
 
