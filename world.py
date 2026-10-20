@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 """
-World daily metrics for Slack, sent as one image hosted on GitHub Pages.
+World daily metrics for Slack, sent as one image.
 
-The workflow runs this script in 3 steps:
-  python world.py build            pull 3 Dune queries, draw the PNG into site/ (with the images already published)
-  (GitHub publishes site/ on GitHub Pages: only the images are public, the repo and code stay private)
-  python world.py post             post the image link to Slack with the incoming webhook
-  python world.py notify-failure   only if a step failed: tell Slack, with a link to the run
+1. Pulls 3 Dune queries: trades & volume, oracle cost, fee streams
+2. Draws one PNG: charts/world_report.png
+3. Pushes the PNG to the world-report-charts branch of this (public) repo; the branch is replaced every run
+4. Posts it to Slack with the incoming webhook, using the raw.githubusercontent.com link
 
-Slack webhooks can't take files, only image links that open without logging in. GitHub Pages
-gives such a link. Every Pages deploy replaces the whole site, so build copies back the images
-already published (from any report that uses this site) and keeps the last KEEP_DAYS days.
-
-Secrets: DUNE_API_KEY_FRONTEND, SLACK_WEBHOOK_JANUS (nothing else).
-PAGES_URL is filled in by the workflow itself (actions/configure-pages).
+Only 2 secrets: DUNE_API_KEY_FRONTEND and SLACK_WEBHOOK_JANUS.
+The push uses the login that actions/checkout sets up (the yml needs `permissions: contents: write`).
 
 pip install dune-client python-dotenv requests matplotlib numpy
 """
 
-import json
 import logging
 import os
-import sys
+import subprocess
 import textwrap
 import time
 import urllib.request
@@ -50,12 +44,8 @@ TRADES_VOL_QUERY_ID = 7838619   # trades_* , volume_*
 ORACLE_QUERY_ID     = 7838666   # oracle_cost_*
 FEES_QUERY_ID       = 7842592   # one row per stream: dflow / phantom / janusfi_protocol
 
-# GitHub Pages hosting (PAGES_URL comes from the workflow, it is not a secret)
-PAGES_URL = os.getenv("PAGES_URL", "").strip().rstrip("/")
-SITE = Path("site")                          # everything in here gets published on GitHub Pages
-PENDING = Path("charts/pending_slack.json")  # hands the image link from "build" to "post"
-KEEP_DAYS = 30                               # older images are removed from the site
-OUT = Path("charts/world_report.png")        # local runs only
+CHART_BRANCH = "world-report-charts"  # the image lives here, replaced every run
+OUT = Path("charts/world_report.png")
 
 if not DUNE_API_KEY:
     raise SystemExit("DUNE_API_KEY_FRONTEND is not set — add it as a repo secret.")
@@ -373,36 +363,32 @@ def render(d, path=OUT):
     return p.save(path)
 
 
-# ============================== GitHub Pages ==============================
-def carry_over_published_images():
-    """Each Pages deploy replaces the whole site, so copy back the images already published
-    (both reports can share the site) and drop the ones older than KEEP_DAYS."""
-    SITE.mkdir(parents=True, exist_ok=True)
-    try:
-        r = requests.get(f"{PAGES_URL}/manifest.json", params={"t": int(time.time())}, timeout=30)
-        old = r.json() if r.status_code == 200 else []
-    except (requests.RequestException, ValueError):
-        old = []
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
-    kept = []
-    for f in old:
-        if not isinstance(f, str) or ".." in f or f.startswith("/") or Path(f).name[:10] < cutoff:
-            continue
-        try:
-            r = requests.get(f"{PAGES_URL}/{f}", timeout=60)
-        except requests.RequestException:
-            continue
-        if r.status_code == 200:
-            (SITE / f).parent.mkdir(parents=True, exist_ok=True)
-            (SITE / f).write_bytes(r.content)
-            kept.append(f)
-    print(f"Kept {len(kept)} published images from the last {KEEP_DAYS} days")
-    return kept
+# ============================== publish & slack ==============================
+def git(*args, stdin=None):
+    r = subprocess.run(["git", *args], input=stdin, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed: {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout.strip()
+
+
+def publish_to_github(path, d):
+    """Put today's PNG on CHART_BRANCH as its only commit and return a raw.githubusercontent.com link.
+    It pushes with the login that actions/checkout already set up, so no token variable is needed.
+    Force push = the old image is replaced. The link uses the commit id, so Slack never shows a cached old image."""
+    blob = git("hash-object", "-w", str(path))
+    tree = git("mktree", stdin=f"100644 blob {blob}\t{path.name}\n")
+    commit = git("-c", "user.name=github-actions[bot]",
+                 "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+                 "commit-tree", tree, "-m", f"world report for {d['day']}")
+    git("push", "--force", "origin", f"{commit}:refs/heads/{CHART_BRANCH}")
+    repo = os.getenv("GITHUB_REPOSITORY", "")  # owner/repo, set by GitHub Actions on every run
+    print(f"Pushed image to {repo}, branch {CHART_BRANCH} ({commit[:7]})")
+    return f"https://raw.githubusercontent.com/{repo}/{commit}/{path.name}"
 
 
 def link_works(url):
-    """Open the link with no login, the same way Slack will. Waits up to ~2 minutes."""
-    for _ in range(12):
+    """Open the link with no login, the same way Slack will. Waits up to ~1 minute."""
+    for _ in range(6):
         try:
             r = requests.get(url, timeout=60)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
@@ -413,7 +399,6 @@ def link_works(url):
     return False
 
 
-# ============================== slack ==============================
 def post_to_slack(payload):
     r = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=60)
     if r.status_code != 200:
@@ -432,48 +417,37 @@ def send_report(d, image_url):
     print("Report sent to Slack successfully!")
 
 
-# ============================== steps ==============================
-def build():
+# ============================== main ==============================
+def main():
     print(f"Starting World report at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     tv = fetch_dune_row(TRADES_VOL_QUERY_ID)
     orc = fetch_dune_row(ORACLE_QUERY_ID)
     fee = {r.get("stream"): r for r in fetch_dune_rows(FEES_QUERY_ID)}
     if not (tv or orc or fee):
-        raise SystemExit("No data fetched from Dune.")
+        print("No data fetched from Dune. Exiting.")
+        return
 
     d = build_data(tv, orc, fee)
     print()
     for n, (now, before, ch) in d["metrics"].items():
         print(f"{n}: {fmt(n, now)} vs {fmt(n, before)} ({sign(ch)})")
 
-    if not PAGES_URL:
-        print(f"\nPAGES_URL is empty (running locally?), so the image is only saved: {render(d)}")
+    path = render(d)
+    print(f"\nSaved {path}")
+    if os.getenv("GITHUB_ACTIONS") != "true":
+        print("Not running on GitHub Actions, so the image is only saved (nothing pushed or posted).")
         return
-    files = carry_over_published_images()
-    name = f"world/{datetime.now(timezone.utc):%Y-%m-%d-%H%M%S}.png"  # new name every run, so no stale cache
-    render(d, SITE / name)
-    files.append(name)
-    (SITE / "manifest.json").write_text(json.dumps(files, indent=1))
-    PENDING.parent.mkdir(parents=True, exist_ok=True)
-    PENDING.write_text(json.dumps({"day": d["day"], "long_day": d["long_day"], "image_url": f"{PAGES_URL}/{name}"}))
-    print(f"\nSaved {SITE / name}, ready to publish")
-
-
-def post():
-    job = json.loads(PENDING.read_text())
-    if not link_works(job["image_url"]):
-        raise RuntimeError(f"Slack can't open {job['image_url']}. In Settings → Pages, the site must be "
-                           "visible without login (Public). Only the images are published, not the code.")
-    send_report(job, job["image_url"])
+    try:
+        url = publish_to_github(path, d)
+        if not link_works(url):
+            raise RuntimeError(f"Slack could not open {url}. The repo must be public for Slack to show the image.")
+    except Exception as e:
+        post_to_slack({"text": f"World Daily Metrics for {d['day']}: the image could not be published "
+                               f"({str(e)[:200]}). Check the GitHub Actions log."})
+        raise
+    send_report(d, url)
     print("\nJob completed!")
 
 
-def notify_failure():
-    run = (f"{os.getenv('GITHUB_SERVER_URL', 'https://github.com')}/{os.getenv('GITHUB_REPOSITORY', '')}"
-           f"/actions/runs/{os.getenv('GITHUB_RUN_ID', '')}")
-    post_to_slack({"text": f"World Daily Metrics: today's report failed. See the log: {run}"})
-
-
 if __name__ == "__main__":
-    step = sys.argv[1] if len(sys.argv) > 1 else "build"
-    {"build": build, "post": post, "notify-failure": notify_failure}[step]()
+    main()
