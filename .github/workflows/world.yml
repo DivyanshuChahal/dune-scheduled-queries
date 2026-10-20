@@ -7,9 +7,24 @@ on:
     # far more reliable.
     - cron: '17 12 * * *'
   workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+  pages: write       # publish the report image on GitHub Pages (only the image, the repo stays private)
+  id-token: write    # needed by actions/deploy-pages
+
+concurrency:
+  group: github-pages      # reports that share the Pages site never publish at the same moment
+  cancel-in-progress: false
+
 jobs:
   generate-report:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    env:
+      DUNE_API_KEY_FRONTEND: ${{ secrets.DUNE_API_KEY_FRONTEND }}
+      SLACK_WEBHOOK_JANUS: ${{ secrets.SLACK_WEBHOOK_JANUS }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,12 +36,28 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install matplotlib numpy  # NEW: needed to draw the image
-      - name: Run world report script
+          pip install matplotlib numpy
+
+      - name: Get the GitHub Pages address
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Make the report image
         env:
-          DUNE_API_KEY_FRONTEND: ${{ secrets.DUNE_API_KEY_FRONTEND }}
-          SLACK_WEBHOOK_JANUS: ${{ secrets.SLACK_WEBHOOK_JANUS }}
-          CHART_REPO: DivyanshuChahal/report-charts             # NEW: public repo that only holds the images
-          CHART_REPO_TOKEN: ${{ secrets.CHART_REPO_TOKEN }}     # NEW: token that can push to that repo
-        run: |
-          python world.py
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        run: python world.py build
+
+      - name: Upload the image for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Publish on GitHub Pages
+        uses: actions/deploy-pages@v4
+
+      - name: Post to Slack
+        run: python world.py post
+
+      - name: Tell Slack if something failed
+        if: failure()
+        run: python world.py notify-failure
