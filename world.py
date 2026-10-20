@@ -20,6 +20,7 @@ Env vars:
 pip install dune-client python-dotenv requests matplotlib numpy
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -43,6 +44,7 @@ from matplotlib.colors import to_rgb
 from matplotlib.patches import Circle, FancyBboxPatch
 
 load_dotenv()
+logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)  # hide harmless "findfont" warnings
 
 DUNE_API_KEY = os.getenv("DUNE_API_KEY_FRONTEND")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_JANUS")
