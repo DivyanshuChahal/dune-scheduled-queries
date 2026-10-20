@@ -7,8 +7,6 @@ on:
     # far more reliable.
     - cron: '17 12 * * *'
   workflow_dispatch:  # Allow manual trigger
-permissions:
-  contents: write  # NEW: lets the job push the report image to the world-report-charts branch
 jobs:
   generate-report:
     runs-on: ubuntu-latest
@@ -28,6 +26,7 @@ jobs:
         env:
           DUNE_API_KEY_FRONTEND: ${{ secrets.DUNE_API_KEY_FRONTEND }}
           SLACK_WEBHOOK_JANUS: ${{ secrets.SLACK_WEBHOOK_JANUS }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # NEW: used to push the image (GitHub gives this automatically)
+          CHART_REPO: DivyanshuChahal/report-charts             # NEW: public repo that only holds the images
+          CHART_REPO_TOKEN: ${{ secrets.CHART_REPO_TOKEN }}     # NEW: token that can push to that repo
         run: |
           python world.py
